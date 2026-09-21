@@ -1,10 +1,16 @@
 """
 UNIT TESTS FOR WEIGHT SERIALIZATION & IO (ZERO SKLEARN)
 ======================================================
-1. Round-trip model qua JSON: anomaly_score và predict giống hệt (np.allclose).
+1. Round-trip model qua JSON: anomaly_score và predict giống hệt.
 2. Round-trip baseline: baseline_score giống hệt.
 3. dist_min / dist_max của baseline không đổi khi thay X_test.
-4. is_cache_valid = False khi đổi random_state, đổi nội dung dữ liệu, hoặc truyền tham số CLI tường minh.
+4. is_cache_valid = False khi đổi random_state, đổi nội dung dữ liệu, hoặc truyền CLI.
+5. save_best_model và load_best_model qua file JSON thật.
+6. save_best_model khi tuning=None.
+7. Nạp từ thư mục rỗng raise FileNotFoundError.
+8. Tính nhất quán của 3 file baseline (.json, .npz, .txt).
+9. weights_exist yêu cầu đủ 4 file và size > 0.
+10. sync_baseline_files tự động sinh/đồng bộ .npz và .txt từ JSON.
 """
 
 import os
@@ -140,43 +146,196 @@ class TestWeightsSerialization(unittest.TestCase):
 
             self.assertFalse(is_cache_valid(meta, data_path, random_state=42, test_size=0.2, explicit_override=False))
 
-    def test_05_baseline_npz_roundtrip(self):
-        """5. Round-trip baseline qua .npz: baseline_score khớp 100%."""
-        baseline_w = fit_baseline(self.X_train, sensor_cols=[f"feat_{i+1}" for i in range(5)])
+    def test_05_save_load_best_model_file_roundtrip(self):
+        """5. save_best_model và load_best_model qua file JSON thật (kiểm tra compact tree, placeholders, round-trip)."""
+        model = IsolationForest(n_estimators=12, max_samples=32, contamination=0.1, random_state=42)
+        model.fit(self.X_train)
+
+        best_params = {"n_estimators": 12, "max_samples": 32, "max_features": 1.0}
+        tuning = {"criterion": "score_spread", "results": [], "best_index": 0}
+        metrics = {"roc_auc": 0.85, "average_precision": 0.65, "score_spread": 0.07}
+        meta = {"data_path": "shuttle.csv", "data_sha256": "12345", "random_state": 42, "test_size": 0.2, "n_train": 100}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = save_best_model(model, best_params, tuning, metrics, meta, tmpdir)
+            expected_path = os.path.join(tmpdir, "best_model_weights.json")
+            self.assertEqual(path, expected_path)
+            self.assertTrue(os.path.exists(path) and os.path.getsize(path) > 0)
+
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertNotIn("__TREE_", content)
+            self.assertNotIn("NaN", content)
+
+            data = json.loads(content)
+            self.assertEqual(set(data.keys()), {"meta", "best_params", "tuning", "metrics", "model"})
+            self.assertEqual(len(data["model"]["trees"]), 12)
+
+            trees_dict = model.to_dict()["trees"]
+            for idx in [0, 1, 10, 11]:
+                compact_str = json.dumps(trees_dict[idx], ensure_ascii=False)
+                self.assertIn(compact_str, content)
+
+            model2, loaded_data = load_best_model(tmpdir)
+            scores1 = model.anomaly_score(self.X_test)
+            scores2 = model2.anomaly_score(self.X_test)
+            np.testing.assert_allclose(scores1, scores2, atol=1e-12)
+
+            preds1 = model.predict(self.X_test)
+            preds2 = model2.predict(self.X_test)
+            np.testing.assert_array_equal(preds1, preds2)
+
+            self.assertEqual(loaded_data["best_params"], best_params)
+            self.assertEqual(loaded_data["metrics"], metrics)
+            self.assertEqual(loaded_data["meta"], meta)
+            self.assertEqual(loaded_data["tuning"], tuning)
+
+            self.assertEqual(model2.n_estimators, model.n_estimators)
+            self.assertEqual(model2.max_depth, model.max_depth)
+            self.assertEqual(model2.threshold_, model.threshold_)
+            self.assertEqual(model2.offset_, model.offset_)
+
+    def test_06_save_best_model_tuning_none(self):
+        """6. save_best_model khi tuning=None -> lưu và nạp được, data['tuning'] is None, điểm số vẫn khớp."""
+        model = IsolationForest(n_estimators=10, max_samples=32, contamination=0.1, random_state=42)
+        model.fit(self.X_train)
+
+        best_params = {"n_estimators": 10, "max_samples": 32, "max_features": 1.0}
+        metrics = {"roc_auc": 0.85, "average_precision": 0.65, "score_spread": 0.07}
+        meta = {"data_path": "shuttle.csv", "data_sha256": "12345", "random_state": 42, "test_size": 0.2, "n_train": 100}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_best_model(model, best_params, None, metrics, meta, tmpdir)
+            model2, data = load_best_model(tmpdir)
+
+            self.assertIsNone(data["tuning"])
+            scores1 = model.anomaly_score(self.X_test)
+            scores2 = model2.anomaly_score(self.X_test)
+            np.testing.assert_allclose(scores1, scores2, atol=1e-12)
+
+    def test_07_load_missing_files(self):
+        """7. Nạp từ thư mục rỗng phải raise FileNotFoundError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(FileNotFoundError):
+                load_best_model(tmpdir)
+            with self.assertRaises(FileNotFoundError):
+                load_baseline(tmpdir)
+            with self.assertRaises(FileNotFoundError):
+                load_baseline_npz(tmpdir)
+
+    def test_08_baseline_three_files_consistent(self):
+        """8. Kiểm tra tính nhất quán của 3 file baseline (.json, .npz, .txt)."""
+        sensor_cols = [f"feat_{i+1}" for i in range(5)]
+        baseline_w = fit_baseline(self.X_train, sensor_cols=sensor_cols)
         scores_orig = baseline_score(self.X_test, baseline_w)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             save_baseline(baseline_w, tmpdir)
-            loaded_npz_w = load_baseline_npz(tmpdir)
-            scores_npz = baseline_score(self.X_test, loaded_npz_w)
+            json_p = os.path.join(tmpdir, "baseline_weights.json")
+            npz_p = os.path.join(tmpdir, "baseline_weights.npz")
+            txt_p = os.path.join(tmpdir, "baseline_weights.txt")
 
-            np.testing.assert_allclose(
-                scores_orig, scores_npz, atol=1e-12,
-                err_msg="Baseline score nạp từ file .npz phải khớp 100% với baseline score gốc!"
-            )
+            self.assertTrue(os.path.exists(json_p) and os.path.getsize(json_p) > 0)
+            self.assertTrue(os.path.exists(npz_p) and os.path.getsize(npz_p) > 0)
+            self.assertTrue(os.path.exists(txt_p) and os.path.getsize(txt_p) > 0)
 
-    def test_06_sync_baseline_files(self):
-        """6. sync_baseline_files: tự động sinh .npz và .txt khi thiếu mà không đổi JSON."""
-        baseline_w = fit_baseline(self.X_train, sensor_cols=[f"feat_{i+1}" for i in range(5)])
+            loaded_json = load_baseline(tmpdir)
+            loaded_npz = load_baseline_npz(tmpdir)
+
+            np.testing.assert_allclose(loaded_npz["train_mean"], loaded_json["train_mean"])
+            np.testing.assert_allclose(loaded_npz["train_std"], loaded_json["train_std"])
+            self.assertEqual(loaded_npz["dist_min"], loaded_json["dist_min"])
+            self.assertEqual(loaded_npz["dist_max"], loaded_json["dist_max"])
+
+            scores_npz = baseline_score(self.X_test, loaded_npz)
+            np.testing.assert_allclose(scores_orig, scores_npz, atol=1e-12)
+
+            with open(txt_p, "r", encoding="utf-8") as f:
+                txt_content = f.read()
+
+            self.assertIn("dist_min", txt_content)
+            self.assertIn("dist_max", txt_content)
+            for col in sensor_cols:
+                self.assertIn(col, txt_content)
+            fmt_mean0 = format(float(baseline_w["train_mean"][0]), ".17g")
+            self.assertIn(fmt_mean0, txt_content)
+
+    def test_09_weights_exist_requires_all_four(self):
+        """9. weights_exist yêu cầu đủ cả 4 file và kích thước > 0."""
+        sensor_cols = [f"feat_{i+1}" for i in range(5)]
+        baseline_w = fit_baseline(self.X_train, sensor_cols=sensor_cols)
+        best_params = {"n_estimators": 10, "max_samples": 32, "max_features": 1.0}
+        metrics = {"roc_auc": 0.85, "average_precision": 0.65, "score_spread": 0.07}
+        meta = {"data_path": "shuttle.csv", "data_sha256": "12345", "random_state": 42, "test_size": 0.2, "n_train": 100}
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # 1. Chỉ ghi file JSON
-            json_path = os.path.join(tmpdir, "baseline_weights.json")
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(baseline_w, f, indent=2)
+            save_baseline(baseline_w, tmpdir)
+            save_best_model(self.model, best_params, None, metrics, meta, tmpdir)
 
-            # verify npz and txt missing
-            missing = missing_weight_files(tmpdir)
-            self.assertIn("baseline_weights.npz", missing)
-            self.assertIn("baseline_weights.txt", missing)
+            self.assertTrue(weights_exist(tmpdir))
+            self.assertEqual(missing_weight_files(tmpdir), [])
 
-            # 2. Call sync_baseline_files
+            all_files = ["baseline_weights.json", "baseline_weights.npz", "baseline_weights.txt", "best_model_weights.json"]
+            for f_name in all_files:
+                f_path = os.path.join(tmpdir, f_name)
+                with open(f_path, "rb") as f:
+                    data_bytes = f.read()
+                os.remove(f_path)
+
+                self.assertFalse(weights_exist(tmpdir))
+                self.assertEqual(missing_weight_files(tmpdir), [f_name])
+
+                # Restore
+                with open(f_path, "wb") as f:
+                    f.write(data_bytes)
+                self.assertTrue(weights_exist(tmpdir))
+
+            # Overwrite one file with 0 bytes
+            zero_target = os.path.join(tmpdir, "baseline_weights.txt")
+            with open(zero_target, "w") as f:
+                f.write("")
+            self.assertFalse(weights_exist(tmpdir))
+            self.assertIn("baseline_weights.txt", missing_weight_files(tmpdir))
+
+    def test_10_sync_baseline_files(self):
+        """10. sync_baseline_files: tự động sinh/đồng bộ .npz và .txt từ JSON."""
+        sensor_cols = [f"feat_{i+1}" for i in range(5)]
+        baseline_w = fit_baseline(self.X_train, sensor_cols=sensor_cols)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Thư mục không có baseline_weights.json -> []
+            synced_empty = sync_baseline_files(tmpdir)
+            self.assertEqual(synced_empty, [])
+
+            # 2. Ghi file JSON
+            json_p = save_baseline(baseline_w, tmpdir)
+            json_bytes_before = os.path.getsize(json_p)
+
+            # Xóa .npz và .txt
+            os.remove(os.path.join(tmpdir, "baseline_weights.npz"))
+            os.remove(os.path.join(tmpdir, "baseline_weights.txt"))
+
             synced = sync_baseline_files(tmpdir)
             self.assertEqual(set(synced), {"baseline_weights.npz", "baseline_weights.txt"})
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, "baseline_weights.npz")))
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, "baseline_weights.txt")))
+            self.assertEqual(os.path.getsize(json_p), json_bytes_before)
 
-            # 3. Call again -> nothing regenerated
-            synced_again = sync_baseline_files(tmpdir)
-            self.assertEqual(synced_again, [])
+            # 3. Ghi sai giá trị vào npz
+            corrupt_w = dict(baseline_w)
+            corrupt_w["train_mean"] = [m + 1.0 for m in baseline_w["train_mean"]]
+            save_baseline(corrupt_w, tmpdir)
+            with open(json_p, "w", encoding="utf-8") as f:
+                json.dump(baseline_w, f, indent=2)
+
+            synced_corrupt = sync_baseline_files(tmpdir)
+            self.assertIn("baseline_weights.npz", synced_corrupt)
+
+            # 4. Sync lại lần nữa -> []
+            synced_no_op = sync_baseline_files(tmpdir)
+            self.assertEqual(synced_no_op, [])
+
 
 
 if __name__ == "__main__":

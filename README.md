@@ -33,7 +33,8 @@ iforest/
 │
 └── tests/
     ├── test_pipeline.py                     # Bộ 21 bài kiểm thử tự động toàn diện
-    └── test_weights.py                      # Bộ kiểm thử serialization & cache trọng số
+    ├── test_weights.py                      # Bộ 10 bài kiểm thử serialization & nhất quán 4 file trọng số
+    └── test_pipeline_cache.py               # Bộ 7 bài kiểm thử end-to-end cache & không train lại
 ```
 
 ---
@@ -270,5 +271,5 @@ Thư mục `weights/` chứa đầy đủ **4 file trọng số** theo đúng qu
 2. **Loại Trừ Hoàn Toàn Rò Rỉ Nhãn (100% Leak-Free):** Cột 10 được tách biệt hoàn toàn khỏi không gian huấn luyện; ROC-AUC trung thực đạt **0.8269** trên 9 cảm biến thật.
 3. **RCA Phi Tham Số Bền Vững (Percentile Rank RCA):** Khắc phục triệt để sự thất bại của Z-score trên dữ liệu zero-inflated và kurtosis > 2,000; kiểm định ổn định Spearman đạt $\rho = 0.83 \ge 0.60$.
 4. **Phòng Chống Rò Rỉ Dữ Liệu Tuyệt Đối:** Mọi tham số phân vị và thống kê đều được ước lượng độc quyền trên tập Train trước khi áp dụng cho tập Test.
-5. **Độ Tin Cậy & Tinh Gọn Mã Nguồn:** 0 lỗi/cảnh báo linter, 25/25 unit tests tự động (21 pipeline tests + 4 weights tests) vượt qua hoàn hảo.
+5. **Độ Tin Cậy & Tinh Gọn Mã Nguồn:** 0 lỗi/cảnh báo linter, 38/38 unit tests tự động (21 pipeline + 10 weights + 7 cache tests) vượt qua hoàn hảo.
 
