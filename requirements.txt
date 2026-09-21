@@ -1,0 +1,19 @@
+# ==============================================================================
+# DANH SÁCH THƯ VIỆN YÊU CẦU - NASA SHUTTLE ANOMALY DETECTION PROJECT
+# (THUẦN TOÁN HỌC PURE NUMPY - ZERO SCIKIT-LEARN DEPENDENCY)
+# ==============================================================================
+
+# Xử lý dữ liệu và tính toán ma trận cốt lõi (Pure NumPy)
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Trực quan hóa dữ liệu (Visualization)
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Kiểm thử tự động (Testing)
+pytest>=7.0.0
+
+# Jupyter Notebook & Báo cáo HTML
+jupyter>=1.0.0
+nbconvert>=7.0.0
