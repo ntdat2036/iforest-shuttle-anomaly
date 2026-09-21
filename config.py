@@ -139,3 +139,16 @@ RCA_TOP_K: int = 10
 
 # Khoảng chuẩn hóa PctRankDev: max có thể là 50.0 → [0, 50]
 PCT_DEV_MAX_RANGE: float = 50.0
+
+
+# ==============================================================================
+# 8. CẤU HÌNH QUẢN LÝ FILE TRỌNG SỐ (WEIGHT FILES)
+# ==============================================================================
+
+BASELINE_JSON: str = "baseline_weights.json"
+BASELINE_NPZ:  str = "baseline_weights.npz"
+BASELINE_TXT:  str = "baseline_weights.txt"
+MODEL_JSON:    str = "best_model_weights.json"
+
+REQUIRED_WEIGHT_FILES = (BASELINE_JSON, BASELINE_NPZ, BASELINE_TXT, MODEL_JSON)
+

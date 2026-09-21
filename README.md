@@ -22,8 +22,10 @@ iforest/
 ├── requirements.txt                         # Danh mục thư viện phụ thuộc (numpy, pandas, matplotlib, seaborn, pytest)
 ├── README.md                                # Báo cáo khoa học kỹ thuật và hướng dẫn vận hành toàn diện
 │
-├── weights/                                 # THƯ MỤC TRỌNG SỐ ĐÃ SINH RA (2 file JSON)
-│   ├── baseline_weights.json                # Trọng số baseline Distance-to-Centroid trên TRAIN
+├── weights/                                 # THƯ MỤC TRỌNG SỐ ĐÃ SINH RA (4 file)
+│   ├── baseline_weights.json                # Trọng số baseline Distance-to-Centroid trên TRAIN (source of truth)
+│   ├── baseline_weights.npz                 # Trọng số baseline định dạng nén NumPy (np.savez_compressed, allow_pickle=False)
+│   ├── baseline_weights.txt                 # Trọng số baseline dạng văn bản UTF-8 đọc bằng mắt (format .17g)
 │   └── best_model_weights.json              # Trọng số & cấu hình mô hình Isolation Forest tốt nhất
 │
 ├── shuttle_anomaly_detection_iforest.ipynb  # Jupyter Notebook báo cáo trực quan
@@ -247,13 +249,16 @@ print(f"Anomaly Score: {score:.6f} -> Trạng thái: {status}")
 Hệ thống cung cấp cơ chế mã hóa/giải mã và nạp trọng số đã huấn luyện (Model Persistence) nhằm giảm thời gian tính toán từ **~12 giây (lần đầu train/tune)** xuống **< 1.5 giây (các lần chạy tiếp theo)** mà không cần huấn luyện lại.
 
 ### 10.1. Cấu Trúc Thư Mục `weights/`
-Thư mục `weights/` chỉ chứa duy nhất **2 file JSON** chuẩn hóa:
-1. `weights/baseline_weights.json`: Chứa các thống kê chuẩn hóa `train_mean`, `train_std`, và khoảng cách min/max `dist_min`, `dist_max` được tính **thuần túy trên tập TRAIN** (loại trừ 100% rò rỉ dữ liệu kiểm thử).
-2. `weights/best_model_weights.json`: Chứa toàn bộ siêu tham số thắng cuộc (`best_params`), nhật ký tinh chỉnh (`tuning`), các chỉ số hiệu năng thực tế (`metrics`: ROC-AUC, AP, Score Spread), thông tin kiểm soát mã băm dữ liệu (`meta`: SHA-256, seed, test size) và cây cô lập được flatten dạng preorder traversal (`trees`).
+Thư mục `weights/` chứa đầy đủ **4 file trọng số** theo đúng quy định:
+1. `weights/baseline_weights.json`: Chứa các thống kê chuẩn hóa `train_mean`, `train_std`, và khoảng cách min/max `dist_min`, `dist_max` được tính **thuần túy trên tập TRAIN** (nguồn chính - source of truth).
+2. `weights/baseline_weights.npz`: Định dạng nén nhị phân NumPy (`np.savez_compressed`), cho phép nạp siêu tốc mà không dùng pickle (`allow_pickle=False`).
+3. `weights/baseline_weights.txt`: File văn bản UTF-8 trình bày trực quan các chỉ số baseline, định dạng số thực `.17g` bảo toàn độ chính xác tuyệt đối.
+4. `weights/best_model_weights.json`: Chứa toàn bộ siêu tham số thắng cuộc (`best_params`), nhật ký tinh chỉnh (`tuning`), các chỉ số hiệu năng thực tế (`metrics`: ROC-AUC, AP, Score Spread), thông tin kiểm soát mã băm dữ liệu (`meta`: SHA-256, seed, test size) và cây cô lập được flatten dạng preorder traversal (`trees`).
 
 ### 10.2. Cơ Chế Vận Hành Cache & Tùy Chọn CLI
-- **Lần chạy đầu tiên:** Chạy `python run_pipeline.py --tune` để tìm kiếm siêu tham số và lưu trọng số tối ưu vào `weights/`.
-- **Các lần chạy sau:** Chạy `python run_pipeline.py` mô hình sẽ tự động phát hiện trọng số hợp lệ và **LOAD ngay lập tức, bỏ qua bước huấn luyện**.
+- **Lần chạy đầu tiên:** Chạy `python run_pipeline.py --tune` để tìm kiếm siêu tham số và lưu trọng số tối ưu vào `weights/` (sinh đủ 4 file).
+- **Các lần chạy sau:** Chạy `python run_pipeline.py` mô hình sẽ tự động phát hiện 4 file trọng số hợp lệ và **LOAD ngay lập tức, bỏ qua bước huấn luyện**.
+- **Tự động đồng bộ file baseline:** Nếu thư mục `weights/` thiếu file `.npz` hoặc `.txt` (hoặc dữ liệu trong `.npz` bị lệch so với JSON), hàm `sync_baseline_files()` sẽ tự động tái tạo lại các file này từ `baseline_weights.json` mà **KHÔNG huấn luyện lại** và **KHÔNG sửa đè file JSON**.
 - **Ép train lại (`--retrain`):** Chạy `python run_pipeline.py --retrain` để huấn luyện lại từ đầu và ghi đè trọng số mới.
 - **Thay đổi siêu tham số CLI:** Khi truyền tường minh bất kỳ tham số mô hình nào (`--n_estimators`, `--max_samples`, `--max_features`, `--contamination`), hệ thống tự nhận diện tham số thay đổi và kích hoạt huấn luyện lại.
 

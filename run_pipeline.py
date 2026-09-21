@@ -49,6 +49,11 @@ from config import (
     STABILITY_MIN_ANOMALIES,
     RCA_TOP_K,
     PCT_DEV_MAX_RANGE,
+    BASELINE_JSON,
+    BASELINE_NPZ,
+    BASELINE_TXT,
+    MODEL_JSON,
+    REQUIRED_WEIGHT_FILES,
 )
 
 # Import serialization & I/O từ weights_io.py
@@ -57,12 +62,16 @@ from weights_io import (
     baseline_score,
     save_baseline,
     load_baseline,
+    load_baseline_npz,
     save_best_model,
     load_best_model,
     weights_exist,
+    missing_weight_files,
+    sync_baseline_files,
     is_cache_valid,
     calculate_data_sha256,
 )
+
 
 if sys.platform == "win32":
     try:
@@ -722,6 +731,11 @@ def main():
 
     data_sha256 = calculate_data_sha256(data_path)
 
+    # Đồng bộ tự động các file baseline (.npz, .txt) từ baseline_weights.json nếu bị thiếu/lệch
+    synced_files = sync_baseline_files(weights_dir)
+    if synced_files:
+        print(f"[+] Tạo bổ sung file baseline từ JSON (không huấn luyện lại): {synced_files}")
+
     # 3. Kiểm tra xem có load được trọng số đã lưu không
     should_load = False
     if weights_exist(weights_dir) and not args.retrain and not tune:
@@ -834,7 +848,8 @@ def main():
         }
         save_baseline(baseline_w, weights_dir)
         save_best_model(best_model, best_params, tuning_info, computed_metrics, meta_dict, weights_dir)
-        print(f"[+] Đã lưu trọng số vào {weights_dir}/")
+        saved_files = list(REQUIRED_WEIGHT_FILES)
+        print(f"[+] Đã lưu trọng số vào {weights_dir}/: {saved_files}")
     else:
         print("\n" + "=" * 70)
         print("ĐỐI CHIẾU METRICS (TRỌNG SỐ ĐÃ LƯU vs TÍNH LẠI KHI LOAD):")

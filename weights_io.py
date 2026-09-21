@@ -2,7 +2,7 @@
 WEIGHTS I/O — ISOLATION FOREST WEIGHT SERIALIZATION & CACHING
 ============================================================
 Tệp xử lý lưu/nạp trọng số cho Baseline (Distance-to-Centroid)
-và mô hình Isolation Forest tốt nhất.
+và mô hình Isolation Forest tốt nhất (Quản lý 4 file trọng số).
 Zero Scikit-Learn Dependency — Sử dụng json, numpy, os, hashlib, datetime.
 """
 
@@ -14,6 +14,13 @@ from typing import List, Dict, Tuple, Any, Optional
 import numpy as np
 
 from model import IsolationForest
+from config import (
+    BASELINE_JSON,
+    BASELINE_NPZ,
+    BASELINE_TXT,
+    MODEL_JSON,
+    REQUIRED_WEIGHT_FILES,
+)
 
 
 def calculate_data_sha256(data_path: str) -> str:
@@ -77,22 +84,97 @@ def baseline_score(X: Any, w: Dict[str, Any]) -> np.ndarray:
     return scores
 
 
-def save_baseline(w: Dict[str, Any], weights_dir: str = "weights") -> str:
-    """Lưu trọng số baseline vào baseline_weights.json."""
-    os.makedirs(weights_dir, exist_ok=True)
-    filepath = os.path.join(weights_dir, "baseline_weights.json")
+def _write_baseline_npz(w: Dict[str, Any], filepath: str) -> None:
+    """Ghi trọng số baseline ra file .npz nén bằng np.savez_compressed (allow_pickle=False)."""
+    np.savez_compressed(
+        filepath,
+        train_mean=np.array(w["train_mean"], dtype=np.float64),
+        train_std=np.array(w["train_std"], dtype=np.float64),
+        dist_min=np.float64(w["dist_min"]),
+        dist_max=np.float64(w["dist_max"]),
+        sensor_cols=np.array(w["sensor_cols"]),
+        created_at=np.array(str(w["created_at"]))
+    )
+
+
+def _write_baseline_txt(w: Dict[str, Any], filepath: str) -> None:
+    """Ghi trọng số baseline ra file văn bản UTF-8 đọc được bằng mắt với định dạng .17g."""
+    created_at = str(w.get("created_at", ""))
+    sensor_cols = w.get("sensor_cols", [])
+    n_sensors = len(sensor_cols)
+    dist_min_str = format(float(w["dist_min"]), ".17g")
+    dist_max_str = format(float(w["dist_max"]), ".17g")
+
+    lines = [
+        "BASELINE WEIGHTS - DISTANCE-TO-CENTROID (unsupervised)",
+        f"created_at : {created_at}",
+        f"n_sensors  : {n_sensors}",
+        f"dist_min   : {dist_min_str}",
+        f"dist_max   : {dist_max_str}",
+        "score = (||(x - train_mean)/train_std||_2 - dist_min) / (dist_max - dist_min + 1e-12)",
+        "",
+        "idx  sensor  train_mean  train_std"
+    ]
+
+    for idx, (col, mean_val, std_val) in enumerate(zip(sensor_cols, w["train_mean"], w["train_std"]), 1):
+        m_str = format(float(mean_val), ".17g")
+        s_str = format(float(std_val), ".17g")
+        lines.append(f"{idx:<4d} {col:<7s} {m_str:<25s} {s_str}")
+
     with open(filepath, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def save_baseline(w: Dict[str, Any], weights_dir: str = "weights") -> str:
+    """
+    Lưu trọng số baseline vào cả 3 file: baseline_weights.json, baseline_weights.npz, baseline_weights.txt.
+    Trả về đường dẫn file JSON (str) để tương thích ngược.
+    """
+    os.makedirs(weights_dir, exist_ok=True)
+    json_path = os.path.join(weights_dir, BASELINE_JSON)
+    npz_path = os.path.join(weights_dir, BASELINE_NPZ)
+    txt_path = os.path.join(weights_dir, BASELINE_TXT)
+
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(w, f, indent=2, ensure_ascii=False)
-    return filepath
+
+    _write_baseline_npz(w, npz_path)
+    _write_baseline_txt(w, txt_path)
+
+    return json_path
 
 
 def load_baseline(weights_dir: str = "weights") -> Dict[str, Any]:
     """Nạp trọng số baseline từ baseline_weights.json."""
-    filepath = os.path.join(weights_dir, "baseline_weights.json")
+    filepath = os.path.join(weights_dir, BASELINE_JSON)
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Không tìm thấy file trọng số baseline: {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_baseline_npz(weights_dir: str = "weights") -> Dict[str, Any]:
+    """
+    Nạp trọng số baseline từ baseline_weights.npz bằng np.load(..., allow_pickle=False).
+    Trả về dict cùng schema với load_baseline (mảng chuyển thành list, dist_min/dist_max thành float).
+    """
+    filepath = os.path.join(weights_dir, BASELINE_NPZ)
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Không tìm thấy file trọng số baseline npz: {filepath}")
+
+    with np.load(filepath, allow_pickle=False) as data:
+        sensor_cols = data["sensor_cols"].tolist()
+        created_at_arr = data["created_at"]
+        created_at_str = str(created_at_arr.item()) if created_at_arr.shape == () else str(created_at_arr[()])
+
+        return {
+            "sensor_cols": sensor_cols,
+            "train_mean": data["train_mean"].astype(np.float64).tolist(),
+            "train_std": data["train_std"].astype(np.float64).tolist(),
+            "dist_min": float(data["dist_min"]),
+            "dist_max": float(data["dist_max"]),
+            "created_at": created_at_str,
+        }
 
 
 # ==============================================================================
@@ -112,7 +194,7 @@ def save_best_model(
     Ghi JSON với ensure_ascii=False. Phần "trees" dạng gọn (compact), phần còn lại indent=2.
     """
     os.makedirs(weights_dir, exist_ok=True)
-    filepath = os.path.join(weights_dir, "best_model_weights.json")
+    filepath = os.path.join(weights_dir, MODEL_JSON)
 
     model_dict = model.to_dict()
     trees = model_dict.get("trees", [])
@@ -148,7 +230,7 @@ def load_best_model(weights_dir: str = "weights") -> Tuple[IsolationForest, Dict
     Nạp mô hình tốt nhất từ best_model_weights.json.
     Trả về (best_model, full_data_dict).
     """
-    filepath = os.path.join(weights_dir, "best_model_weights.json")
+    filepath = os.path.join(weights_dir, MODEL_JSON)
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Không tìm thấy file trọng số mô hình: {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
@@ -162,14 +244,81 @@ def load_best_model(weights_dir: str = "weights") -> Tuple[IsolationForest, Dict
 # 3. UTILITIES & CACHE VALIDATION
 # ==============================================================================
 
+def missing_weight_files(weights_dir: str = "weights") -> List[str]:
+    """Trả tên các file trong REQUIRED_WEIGHT_FILES bị thiếu hoặc có kích thước 0."""
+    missing = []
+    for filename in REQUIRED_WEIGHT_FILES:
+        filepath = os.path.join(weights_dir, filename)
+        if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+            missing.append(filename)
+    return missing
+
+
 def weights_exist(weights_dir: str = "weights") -> bool:
-    """Kiểm tra xem cả 2 file trọng số có tồn tại và hợp lệ không."""
-    baseline_path = os.path.join(weights_dir, "baseline_weights.json")
-    model_path = os.path.join(weights_dir, "best_model_weights.json")
-    return (
-        os.path.exists(baseline_path) and os.path.getsize(baseline_path) > 0 and
-        os.path.exists(model_path) and os.path.getsize(model_path) > 0
-    )
+    """Kiểm tra xem cả 4 file trọng số có tồn tại và hợp lệ không."""
+    return len(missing_weight_files(weights_dir)) == 0
+
+
+def sync_baseline_files(weights_dir: str = "weights") -> List[str]:
+    """
+    Tự động đồng bộ các file baseline (.npz, .txt) từ baseline_weights.json.
+    - Nếu baseline_weights.json không tồn tại hoặc rỗng: trả về [] (không lỗi).
+    - Đọc JSON; nếu .npz hoặc .txt thiếu/rỗng, hoặc giá trị trong .npz lệch JSON
+      (np.allclose, atol=1e-12) thì ghi lại .npz/.txt từ JSON.
+    - KHÔNG bao giờ ghi đè baseline_weights.json và best_model_weights.json.
+    - Trả về danh sách tên file đã tạo lại.
+    """
+    json_path = os.path.join(weights_dir, BASELINE_JSON)
+    if not os.path.exists(json_path) or os.path.getsize(json_path) == 0:
+        return []
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            w = json.load(f)
+    except Exception:
+        return []
+
+    npz_path = os.path.join(weights_dir, BASELINE_NPZ)
+    txt_path = os.path.join(weights_dir, BASELINE_TXT)
+
+    regenerated = []
+
+    # Kiểm tra file .npz
+    need_npz = False
+    if not os.path.exists(npz_path) or os.path.getsize(npz_path) == 0:
+        need_npz = True
+    else:
+        try:
+            npz_dict = load_baseline_npz(weights_dir)
+            json_mean = np.array(w["train_mean"], dtype=np.float64)
+            npz_mean = np.array(npz_dict["train_mean"], dtype=np.float64)
+            json_std = np.array(w["train_std"], dtype=np.float64)
+            npz_std = np.array(npz_dict["train_std"], dtype=np.float64)
+
+            if not (
+                np.allclose(json_mean, npz_mean, atol=1e-12)
+                and np.allclose(json_std, npz_std, atol=1e-12)
+                and abs(float(w["dist_min"]) - float(npz_dict["dist_min"])) <= 1e-12
+                and abs(float(w["dist_max"]) - float(npz_dict["dist_max"])) <= 1e-12
+            ):
+                need_npz = True
+        except Exception:
+            need_npz = True
+
+    if need_npz:
+        _write_baseline_npz(w, npz_path)
+        regenerated.append(BASELINE_NPZ)
+
+    # Kiểm tra file .txt
+    need_txt = False
+    if not os.path.exists(txt_path) or os.path.getsize(txt_path) == 0:
+        need_txt = True
+
+    if need_txt:
+        _write_baseline_txt(w, txt_path)
+        regenerated.append(BASELINE_TXT)
+
+    return regenerated
 
 
 def is_cache_valid(
@@ -210,3 +359,4 @@ def is_cache_valid(
         return False
 
     return True
+

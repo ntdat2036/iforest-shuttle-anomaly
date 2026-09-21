@@ -23,9 +23,12 @@ from weights_io import (
     baseline_score,
     save_baseline,
     load_baseline,
+    load_baseline_npz,
     save_best_model,
     load_best_model,
     weights_exist,
+    missing_weight_files,
+    sync_baseline_files,
     is_cache_valid,
     calculate_data_sha256,
 )
@@ -137,6 +140,45 @@ class TestWeightsSerialization(unittest.TestCase):
 
             self.assertFalse(is_cache_valid(meta, data_path, random_state=42, test_size=0.2, explicit_override=False))
 
+    def test_05_baseline_npz_roundtrip(self):
+        """5. Round-trip baseline qua .npz: baseline_score khớp 100%."""
+        baseline_w = fit_baseline(self.X_train, sensor_cols=[f"feat_{i+1}" for i in range(5)])
+        scores_orig = baseline_score(self.X_test, baseline_w)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_baseline(baseline_w, tmpdir)
+            loaded_npz_w = load_baseline_npz(tmpdir)
+            scores_npz = baseline_score(self.X_test, loaded_npz_w)
+
+            np.testing.assert_allclose(
+                scores_orig, scores_npz, atol=1e-12,
+                err_msg="Baseline score nạp từ file .npz phải khớp 100% với baseline score gốc!"
+            )
+
+    def test_06_sync_baseline_files(self):
+        """6. sync_baseline_files: tự động sinh .npz và .txt khi thiếu mà không đổi JSON."""
+        baseline_w = fit_baseline(self.X_train, sensor_cols=[f"feat_{i+1}" for i in range(5)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Chỉ ghi file JSON
+            json_path = os.path.join(tmpdir, "baseline_weights.json")
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(baseline_w, f, indent=2)
+
+            # verify npz and txt missing
+            missing = missing_weight_files(tmpdir)
+            self.assertIn("baseline_weights.npz", missing)
+            self.assertIn("baseline_weights.txt", missing)
+
+            # 2. Call sync_baseline_files
+            synced = sync_baseline_files(tmpdir)
+            self.assertEqual(set(synced), {"baseline_weights.npz", "baseline_weights.txt"})
+
+            # 3. Call again -> nothing regenerated
+            synced_again = sync_baseline_files(tmpdir)
+            self.assertEqual(synced_again, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
