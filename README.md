@@ -197,7 +197,7 @@ Thực thi 21 bài kiểm thử nghiêm ngặt bao quát toán học, kiểm so�
 python -m pytest tests -v
 ```
 
-*Kết quả kiểm thử thực tế:* **25 passed (< 1.5s, 100% Pass Rate)**.
+*Kết quả kiểm thử thực tế:* **38 passed (< 3.0s, 100% Pass Rate)**.
 
 ### 8.5. Khởi Chạy Jupyter Notebook
 Mở notebook phân tích trực quan toàn diện (18 hình vẽ khoa học tương tác):
